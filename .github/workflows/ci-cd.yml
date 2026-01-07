@@ -1,0 +1,71 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed for changelog generation
+
+      - name: Set up Node.js (adapt version as needed)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint code
+        run: npm run lint
+
+      - name: Type check (if TypeScript)
+        run: npm run type-check
+        continue-on-error: false
+
+      - name: Run tests
+        run: npm test -- --coverage
+
+      - name: Build project
+        run: npm run build
+
+      - name: Security scan (basic)
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+
+      - name: Generate/Update Changelog
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ardalanamini/auto-changelog@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          mention-authors: true
+          include-unreleased: false
+
+      - name: Update HEALTH.md badge
+        if: success()
+        run: |
+          echo "Status: 🟢 Green (CI Passed)" > HEALTH.md.tmp
+          tail -n +2 HEALTH.md >> HEALTH.md.tmp || true
+          mv HEALTH.md.tmp HEALTH.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add HEALTH.md
+          git commit -m "ci: update health status [skip ci]" || echo "No changes"
+          git push || echo "Push failed (normal on PR)"
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: test-and-build
+    steps:
+      - uses: github/codeql-action/analyze@v3
